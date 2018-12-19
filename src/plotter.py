@@ -1,117 +1,91 @@
 import numpy as np
-import csv
-import plotly.offline as pltly
+import plotly.offline as plt
 import plotly.graph_objs as graph_obj
 
 #
-# format sequences and respective labels for plotting 
 #
-def asmb_plot_dat(hp, seqs, labels): 
-    sess_dat = []
-
-    for seq_idx in range(len(seqs)):
-        sess_dat.append([seqs[seq_idx], labels[seq_idx]])
-    return sess_dat
-
 #
-# assemble labels and test predictions for plotting
-#
-def asmb_test_results(hp, tr_label_bats, tst_label_bats, test_predicts): 
-    feat_dim   = hp["feat_dim"]    
-    target_len = hp["target_len"]
+def plot_3d_clusts(subseqs, clust_idxs):
 
-    predicts_flat   = [[] for feat_idx in range(feat_dim)]
-    tr_flat_labels  = [[] for feat_idx in range(feat_dim)]
-    tst_flat_labels = [[] for feat_idx in range(feat_dim)]
+    #specify how subsequence will be summarized into 3 dimensions
+    rep_idxs = [0, int(float(len(subseqs[0])) / 3), 2 * int(float(len(subseqs[0])) / 3)] 
+    vecs_3d  = []
+
+    for subseq in subseqs:
+        redux_3d = []
+        redux_3d.append(np.mean(subseq[rep_idxs[0]:rep_idxs[1]]))    
+        redux_3d.append(np.mean(subseq[rep_idxs[1]:rep_idxs[2]]))
+        redux_3d.append(np.mean(subseq[rep_idxs[2]:]))
+            
+        vecs_3d.append(redux_3d) 
+
+    #gather coordinates by cluster 
+    num_clusts = len(np.unique(clust_idxs)) 
+    clust_subseqs = [ [] for clust in range(num_clusts) ]
+
+    for subseq_idx in range(len(vecs_3d)):
+        clust_idx = clust_idxs[subseq_idx]
+        clust_subseqs[clust_idx].append(vecs_3d[subseq_idx])        
+
     
-    #flatten predictictions and labels
-    for batch_predicts in test_predicts:
-        for seq_predicts in batch_predicts:
-            for predict_step in seq_predicts:
-                for feat_idx in range(feat_dim):
-                    predicts_flat[feat_idx].append(predict_step[feat_idx])
-                    
-    for tr_label_bat in tr_label_bats:
-        for seq_labels in tr_label_bat:
-            for step_labels in seq_labels:
-                for feat_idx in range(feat_dim):
-                    tr_flat_labels[feat_idx].append(step_labels[feat_idx])
-
-                    #pad test set labels so that start of values aligns with ends of train set labels
-                    tst_flat_labels[feat_idx].append(0)
-
-    for tst_label_bat in tst_label_bats:
-        for seq_labels in tst_label_bat:
-            for step_labels in seq_labels:
-                for feat_idx in range(feat_dim):          
-                    tst_flat_labels[feat_idx].append(step_labels[feat_idx])
-                    tr_flat_labels[feat_idx].append(0)
-
-    for feat_idx in range(feat_dim):    	
-        predicts_flat[feat_idx]   = np.array(predicts_flat[feat_idx]).astype(float)
-        tr_flat_labels[feat_idx]  = np.array(tr_flat_labels[feat_idx]).astype(float)
-        tst_flat_labels[feat_idx] = np.array(tst_flat_labels[feat_idx]).astype(float)
+    traces = [] 
+    for clust_idx in range(num_clusts):
+        _trace = graph_obj.Scatter3d(
+            x = np.array([subseq[0] for subseq in clust_subseqs[clust_idx]]),
+            y = np.array([subseq[1] for subseq in clust_subseqs[clust_idx]]), 
+            z = np.array([subseq[2] for subseq in clust_subseqs[clust_idx]]),
+            name = "clust_"+str(clust_idx),
+            mode = 'markers',
+            marker = dict(
+                size = 5,
+                line = dict(
+                    width = 2
+                ) 
+            )   
+        )   
+        traces.append(_trace) 
+    plt.plot(traces, filename="clusts.html")   
     
-    assert(len(predicts_flat[0]) == len(tr_flat_labels[0]) == len(tst_flat_labels[0])), \
-           "plot trace data are not equal lengths" 
-
-    #FIXME plot error
-    '''
-    print("\n**prediction count: " + str(len(predicts_flat)))
-    print("\n**label count:\n\ttr -" + str(len(tr_flat_labels)) + "\n\ttst -" + str(len(tst_flat_labels)))
-
-    _err = [np.absolute(predicts_flat[tr_subseq_idx] - tr_flat_labels[tr_subseq_idx]) for tr_subseq_idx in range(len(tr_flat_labels))]
-    _err += [np.absolute(predicts_flat[tst_subseq_idx + len(tr_flat_labels)] - tst_flat_labels[tst_subseq_idx]) for tst_subseq_idx in range(len(tst_flat_labels))    ]
-    '''
-
-    trace_dat = []
-    for feat_idx in range(feat_dim):
-        trace_dat.append([predicts_flat[feat_idx], "predicts_dim"+str(feat_idx)])
-        trace_dat.append([tr_flat_labels[feat_idx], "tr_labels_dim"+str(feat_idx)])
-        trace_dat.append([tst_flat_labels[feat_idx], "tst_labels_dim"+str(feat_idx)])
-
-    #trace_dat.append([_err, "error"])
-
-    return trace_dat
 
 #
-# writes ground truth and predictions into different columns at specified path 
+# 
 #
-def write_predicts_and_labels(predicts, sess_dat, path):
+def plot_3d_subseqs(subseqs):
 
-    #flatten batch predictions
-    #predicts_flat = [predict[0] for bat_predicts in predicts \
-    #                            for seq_predicts in bat_predicts \
-    #                            for predict in seq_predicts] 
-    #predicts_flat = [     predicts ] #FIXME
-    predicts_flat = predicts
+    #specify how subsequence will be summarized into 3 dimensions
+    rep_idxs = [0, int(float(len(subseqs[0])) / 3), 2 * int(float(len(subseqs[0])) / 3)] 
+    vecs_3d  = []
 
-    label_samps = sess_dat["samples"] ["mp"]
-    err = [np.abs(predicts_flat[predict_idx] - label_samps[predict_idx]) for predict_idx in range(len(predicts_flat))]
+    for subseq in subseqs:
+        redux_3d = []
+        redux_3d.append(np.mean(subseq[rep_idxs[0]:rep_idxs[1]]))    
+        redux_3d.append(np.mean(subseq[rep_idxs[1]:rep_idxs[2]]))
+        redux_3d.append(np.mean(subseq[rep_idxs[2]:]))
+            
+        vecs_3d.append(redux_3d) 
 
-    #write output
-    predict_count = len(predicts_flat)
-    output_file   = open(path, "w") 
+    traces = []
+    traces.append(graph_obj.Scatter3d(x    = np.array([vec[0] for vec in vecs_3d]),
+                                      y    = np.array( [vec[1] for vec in vecs_3d]),
+                                      z    = np.array( [vec[2] for vec in vecs_3d]),
+                                      mode = 'markers',
+                                      marker = dict(
+                                          size = 2
+                                      )))
+    plt.plot(traces, filename = '3d_ts.html')
 
-    #header
-    output_file.write("predictions, labels, absolute_error\n")
- 
-    for predict_idx in range(predict_count):
-        output_file.write(str(predicts_flat[predict_idx]) + "," + str(label_samps[predict_idx]) + "," + str(err[predict_idx]) + "\n") 
-
-    #plot_group( [[predicts_flat, "predicts"], [label_samps[:len(predicts_flat)], "labels"], [err, "error"]], "predictions.html")
-  
 #
-# plot pairs of [trace_data, identifier] and write to supplied path 
 #
-def plot_group(data_id_pairs, output_path):
+#
+def plot_2d_subseqs(subseqs, tag='subseq_'):
     traces = []
 
-    for trace_dat in data_id_pairs:
-        traces.append(graph_obj.Scatter(x    = np.arange(len(trace_dat[0])),
-                                        y    = trace_dat[0],
+    for subseq_idx in range(len(subseqs)):
+        traces.append(graph_obj.Scatter(x    = np.arange(len(subseqs[subseq_idx])),
+                                        y    = subseqs[subseq_idx],
                                         mode = 'lines',
-                                        name = trace_dat[1]))
-    pltly.plot(traces, filename = output_path)
+                                        name = tag+"_"+str(subseq_idx)))
+
+    plt.plot(traces, filename = 'subseqs.html')
 
 
