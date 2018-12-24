@@ -37,43 +37,130 @@ def asmb_lstm(hp):
 def ensemb_from_src(lstm_graph, ensemb_count):
 
     src_params    = lstm_graph["lstm_cells"].get_weights()
-    ensemb_params = [[np.array(np.copy(params)) for params in src_params] for ensemb in range(ensemb_count)]
-       
-    return ensemb_params
+    ensemb_params = [[np.array(np.copy(params)) for params in src_params] for ensemb in range(ensemb_count + 1)]
+      
+    #ref params, ensemb 
+    return [ensemb_params[0]], ensemb_params[1:]
+
+#
+#
+#
+def train(hp, sess_data, _sess, lstm_graph, params):
+    tr_subseqs = sess_data["tr_set"]["feat_subseqs"]
+    tr_labels  = sess_data["tr_set"]["labels"] 
+
+    print("\n**training single LSTM")
+
+    with _sess.as_default() as sess:   
+        lstm_graph["lstm_cells"].set_weights(params[0]) #params are always wrapped so that argument is pointer 
+        bat_idxs = [bat for comp_bats in sess_data["bat_idxs"] for bat in comp_bats]
+ 
+        print("**bat count: " + str(len(bat_idxs)))
+        for ep in range(hp["epochs"]): 
+            for bat_idx in range(len(bat_idxs)):
+                bat_feats  = [[[val] for val in tr_subseqs[_idx]] for _idx in bat_idxs[bat_idx]]  
+                bat_labels = [[[tr_labels[_idx]]] for _idx in bat_idxs[bat_idx]]
+
+                #output RMSE every 5 epochs    
+                if (ep % 5 == 0):
+                    print("**ep: " + str(ep) + " RMSE: " + str(np.sqrt(sess.run(lstm_graph["loss"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels}))))
+              
+                sess.run(lstm_graph["optimizer"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels})
+    
+        params[0] = lstm_graph["lstm_cells"].get_weights()
+ 
+
 
   
 #
 # train model and return error [batch error, averaged epoch error, validation error, average validation error]
 #
 def train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params):
-    feat_subseqs = sess_data["feat_subseqs"]
-    labels       = sess_data["labels"] 
+    tr_subseqs = sess_data["tr_set"]["feat_subseqs"]
+    tr_labels  = sess_data["tr_set"]["labels"] 
 
     with _sess.as_default() as sess:
 
         for comp_idx in range(hp["ensemb_sz"]):
             print("\n**training component model " + str(comp_idx))
     
-            lstm_graph["lstm_cells"].set_weights(ensemb_params[comp_idx])
-        
+            lstm_graph["lstm_cells"].set_weights(ensemb_params[comp_idx]) 
             bat_idxs = sess_data["bat_idxs"][comp_idx]
     
             print("**bat count: " + str(len(bat_idxs)))
             for ep in range(hp["epochs"]): 
                 for bat_idx in range(len(bat_idxs)):
-                    bat_feats  = [[[val] for val in feat_subseqs[_idx]] for _idx in bat_idxs[bat_idx]]  
-                    bat_labels = [[[labels[_idx]]] for _idx in bat_idxs[bat_idx]]
-    
+                    bat_feats  = [[[val] for val in tr_subseqs[_idx]] for _idx in bat_idxs[bat_idx]]  
+                    bat_labels = [[[tr_labels[_idx]]] for _idx in bat_idxs[bat_idx]]
+
+                    #output RMSE every 5 epochs    
                     if (ep % 5 == 0):
-                        print("**ep: " + str(ep) + " " + str(np.sqrt(sess.run(lstm_graph["loss"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels}))))
-                   
+                        print("**ep: " + str(ep) + " RMSE: " + str(np.sqrt(sess.run(lstm_graph["loss"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels}))))
+                  
                     sess.run(lstm_graph["optimizer"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels})
     
             ensemb_params[comp_idx] = lstm_graph["lstm_cells"].get_weights()
-    
-   
-    
-    
 
 
+#
+#
+#
+def test_lstm(hp, sess_data, _sess, lstm_graph, params):
+    tst_subseqs = sess_data["tst_set"]["feat_subseqs"]
+    tst_labels  = sess_data["tst_set"]["labels"] 
+
+    print("\n**testing single LSTM")
+
+    with _sess.as_default() as sess: 
+        _tst_subseqs = [ [[[val] for val in subseq]] for subseq in tst_subseqs]  
+        _tst_labels  = [ [[[val]]] for val in tst_labels]
+
+        tst_err = []
+        lstm_graph["lstm_cells"].set_weights(params[0])   
+
+        for tst_idx in range(len(_tst_subseqs[:500])):
+            print("\n**test_idx: " + str(tst_idx) + " of " + str(len(_tst_subseqs)))
+                
+            out = sess.run(lstm_graph["output"][0][-1], {lstm_graph["feat_bat"]: _tst_subseqs[tst_idx], lstm_graph["label_bat"]: _tst_labels[tst_idx]}) 
+            loss = np.abs(out - tst_labels[tst_idx])
+
+            tst_err.append(loss)
+        return tst_err
+
+         
+#
+# train model and return error [batch error, averaged epoch error, validation error, average validation error]
+#
+def test_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params, gmm):
+    tst_subseqs = sess_data["tst_set"]["feat_subseqs"]
+    tst_labels  = sess_data["tst_set"]["labels"] 
+
+    print("\n**testing ensemble")
+
+    with _sess.as_default() as sess: 
+        _tst_subseqs = [ [[[val] for val in subseq]] for subseq in tst_subseqs]  
+        _tst_labels  = [ [[[val]]] for val in tst_labels]
+
+        tst_err = []
+
+        #FIXME only partial test
+        for tst_idx in range(len(_tst_subseqs[:500])):
+            print("\n**test_idx: " + str(tst_idx) + " of " + str(len(_tst_subseqs)))
+            comp_outs = []              
+
+            for comp_idx in range(hp["ensemb_sz"]):
+                print("comp_idx: " + str(comp_idx))    
+
+                lstm_graph["lstm_cells"].set_weights(ensemb_params[comp_idx])        
+                comp_out = sess.run(lstm_graph["output"][0][-1], {lstm_graph["feat_bat"]: _tst_subseqs[tst_idx], lstm_graph["label_bat"]: _tst_labels[tst_idx]})
+     
+                comp_outs.append(comp_out[0])
+           
+            comp_densities = [val for val in gmm.predict_proba([tst_subseqs[tst_idx]])[0]]
+
+            _h = np.dot(comp_outs, comp_densities)
+            loss = np.abs(_h - tst_labels[tst_idx])
+
+            tst_err.append(loss)
+        return tst_err
 

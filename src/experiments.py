@@ -13,18 +13,27 @@ import plotter as plt
 #
 #
 def train_from_clusts(hp, sess_data):
-    subseqs     = sess_data["feat_subseqs"]
-    clust_idxs  = sess_data["clust_idxs"]
-
     lstm_graph = lstm.asmb_lstm(hp) 
     init_op    = tf.global_variables_initializer() 
     sess       = tf.Session()
 
     with sess.as_default() as _sess: 
-        ensemb_params = lstm.ensemb_from_src(lstm_graph, hp["ensemb_sz"])  
-        lstm.train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params)
+        #initial training 
+        init_params = lstm_graph["lstm_cells"].get_weights()
+        hp["epochs"] = 20
+        #lstm.train(hp, sess_data, _sess, lstm_graph, [init_params])
 
-        return sess, ensemb_params   
+        #clone source model for ensemble
+        ref_params, ensemb_params = lstm.ensemb_from_src(lstm_graph, hp["ensemb_sz"]) 
+
+        #train ensemble 
+        hp["epochs"] = 40
+        lstm.train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params)
+        #train source
+        hp["epochs"] = 10
+        lstm.train(hp, sess_data, _sess, lstm_graph, ref_params)
+
+        return sess, lstm_graph, ref_params, ensemb_params   
 #
 # gaussian mixture model
 #

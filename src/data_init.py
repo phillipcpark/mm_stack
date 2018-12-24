@@ -16,10 +16,10 @@ def read_cl_args():
 # read data from files and assemble for training
 #
 def init_ae_dat(hp, cl_args):
-    headers, cols        = read_file(cl_args["csv_paths"][0])
-    feat_subseqs, labels = create_subseqs(hp, cols)
+    headers, cols   = read_file(cl_args["csv_paths"][0])
+    tr_set, tst_set = create_subseqs(hp, cols)
  
-    return {"attr_headers": headers, "feat_subseqs": feat_subseqs, "labels": labels} 
+    return {"attr_headers": headers, "tr_set": tr_set, "tst_set": tst_set} 
    
 #
 # reads headers and columns from files into memory and returns references 
@@ -81,23 +81,39 @@ def create_subseqs(hp, cols):
  
         subseqs.append(_subseq) 
         labels.append(float(cols[extract_idxs[0]][subseq_idx * subseq_stride + subseq_len]))
-  
-    return subseqs, labels
+
+    #shuffle
+    shuff_idxs = np.arange(subseq_count)
+    np.random.shuffle(shuff_idxs)
+
+    _subseqs = [subseqs[_idx] for _idx in shuff_idxs]
+    _labels  = [labels[_idx] for _idx in shuff_idxs]
+
+    #number of subsequences for training set
+    tr_count = int(hp["tr_set_prop"] * subseq_count)
+
+    tr_set  = {"feat_subseqs": _subseqs[:tr_count], "labels": _labels[:tr_count]}
+    tst_set = {"feat_subseqs": _subseqs[tr_count:], "labels": _labels[tr_count:]}
+
+    #FIXME
+    print("\n**tr set sz: " + str(len(tr_set["feat_subseqs"])))
+    print("\n**tst set sz: " + str(len(tst_set["feat_subseqs"])))
+ 
+ 
+    return tr_set, tst_set
 
 #
 # maps subsequences to batches
 #
 def bat_clust_subseqs(hp, sess_data):
-    subseqs    = sess_data["feat_subseqs"]
-    clust_idxs = sess_data["clust_idxs"]
-
-    bat_sz      = hp["bat_sz"]
     clust_count = hp["ensemb_sz"]
+    clust_idxs  = sess_data["clust_idxs"]
+    bat_sz      = hp["bat_sz"]
 
     #gather subseq idxs by cluster 
     clust_subseq_idxs = [ [] for clust in range(clust_count) ]
 
-    for subseq_idx in range(len(subseqs)):
+    for subseq_idx in range(len(clust_idxs)):
         clust_idx = clust_idxs[subseq_idx]
         clust_subseq_idxs[clust_idx].append(subseq_idx)    
 
