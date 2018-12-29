@@ -26,9 +26,18 @@ def asmb_lstm(hp):
     grad, wrt_params   = zip(*_optimizer.compute_gradients(loss))
     clipped, glob_norm = tf.clip_by_global_norm(grad, gd_clip_thresh) 
     optimizer          = _optimizer.apply_gradients(zip(clipped, wrt_params))
-    
+
+    #disjoint graph for ensemble output
+    norm_predicts = tf.placeholder(tf.float32, [None, 1, hp["feat_dim"]])
+    range_map     = tf.layers.dense(norm_predicts, hp["label_dim"], tf.nn.elu)
+    rm_loss       = tf.reduce_mean(tf.squared_difference(range_map, label_bat))   
+    rm_opt        = tf.train.AdamOptimizer()
+    rm_grad       = rm_opt.compute_gradients(rm_loss)
+    apply_rm_opt  = rm_opt.apply_gradients(rm_grad)
+  
     graph_refs = {"feat_bat":feat_bat, "label_bat":label_bat, "lstm_cells":lstm_cells, "output":output, \
-                  "loss":loss, "optimizer":optimizer}
+                  "loss":loss, "optimizer":optimizer, \
+                  "norm_predicts":norm_predicts, "range_map":range_map, "rm_loss": rm_loss, "optimize_rm":apply_rm_opt}
     return graph_refs
 
 #
@@ -58,12 +67,17 @@ def train(hp, sess_data, _sess, lstm_graph, params):
         print("**bat count: " + str(len(bat_idxs)))
         for ep in range(hp["epochs"]): 
             for bat_idx in range(len(bat_idxs)):
-                bat_feats  = [[[val] for val in tr_subseqs[_idx]] for _idx in bat_idxs[bat_idx]]  
-                bat_labels = [[[tr_labels[_idx]]] for _idx in bat_idxs[bat_idx]]
+                bat_feats  = [[[comp for comp in samp] for samp in tr_subseqs[subseq_idx]] \
+                                                       for subseq_idx in bat_idxs[bat_idx]] 
+
+                bat_labels = [[tr_labels[label_idx]] \
+                                     for label_idx in bat_idxs[bat_idx]]
 
                 #output RMSE every 5 epochs    
                 if (ep % 5 == 0):
-                    print("**ep: " + str(ep) + " RMSE: " + str(np.sqrt(sess.run(lstm_graph["loss"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels}))))
+                    print("**ep: " + str(ep) + " RMSE: " +  str(np.sqrt(sess.run(lstm_graph["loss"], \
+                                                                                 {lstm_graph["feat_bat"]:bat_feats, \
+                                                                                  lstm_graph["label_bat"]:bat_labels}))))
               
                 sess.run(lstm_graph["optimizer"], {lstm_graph["feat_bat"]:bat_feats, lstm_graph["label_bat"]:bat_labels})
     
@@ -90,8 +104,12 @@ def train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params):
             print("**bat count: " + str(len(bat_idxs)))
             for ep in range(hp["epochs"]): 
                 for bat_idx in range(len(bat_idxs)):
-                    bat_feats  = [[[val] for val in tr_subseqs[_idx]] for _idx in bat_idxs[bat_idx]]  
-                    bat_labels = [[[tr_labels[_idx]]] for _idx in bat_idxs[bat_idx]]
+
+                    bat_feats  = [[[comp for comp in samp] for samp in tr_subseqs[subseq_idx]] \
+                                                           for subseq_idx in bat_idxs[bat_idx]] 
+
+                    bat_labels = [[tr_labels[label_idx]] \
+                                         for label_idx in bat_idxs[bat_idx]]
 
                     #output RMSE every 5 epochs    
                     if (ep % 5 == 0):
@@ -101,7 +119,28 @@ def train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params):
     
             ensemb_params[comp_idx] = lstm_graph["lstm_cells"].get_weights()
 
+#
+# after model is trained, dense layer is trained to map normalized ensemble output to original unbounded range
+#
+def train_rm_layer(hp, norm_outs, labels, _sess, lstm_graph):
+    print("\n**training range-map layer")
 
+    bat_count = int(float(len(norm_outs)) / hp["bat_sz"])
+     
+    with _sess.as_default() as sess:    
+        for ep in range(hp["epochs"]): 
+            for bat_idx in range(bat_count):
+                bat_feats  = None #FIXME #FIXME  
+                bat_labels = [[tr_labels[label_idx]] for label_idx in bat_idxs[bat_idx]]
+
+                #output RMSE every 5 epochs    
+                #if (ep % 5 == 0):
+                #    print("**ep: "+str(ep)+" RMSE: "+str(np.sqrt(sess.run(lstm_graph["rm_loss"], \
+                #                                                          {lstm_graph["norm_predicts"]:        , \
+                #                                                           lstm_graph["label_bat"]:             }))))
+              
+                #sess.run(lstm_graph["optimize_rm"], {lstm_graph["norm_predicts"]:   , lstm_graph["label_bat"]:    })
+    
 #
 #
 #
@@ -109,23 +148,36 @@ def test_lstm(hp, sess_data, _sess, lstm_graph, params):
     tst_subseqs = sess_data["tst_set"]["feat_subseqs"]
     tst_labels  = sess_data["tst_set"]["labels"] 
 
+    bat_sz     = hp["bat_sz"] 
+    bat_count  = int(float(len(tst_subseqs)) / bat_sz)
+
     print("\n**testing single LSTM")
 
     with _sess.as_default() as sess: 
-        _tst_subseqs = [ [[[val] for val in subseq]] for subseq in tst_subseqs]  
-        _tst_labels  = [ [[[val]]] for val in tst_labels]
-
+        predicts = []
         tst_err = []
+
         lstm_graph["lstm_cells"].set_weights(params[0])   
 
-        for tst_idx in range(len(_tst_subseqs[:500])):
-            print("\n**test_idx: " + str(tst_idx) + " of " + str(len(_tst_subseqs)))
+        for bat_idx in range(bat_count):
+            print("\n**test_bat_idx: " + str(bat_idx) + " of " + str(bat_count))
+
+            start_idx = bat_idx * bat_sz
+            bat_feats = tst_subseqs[start_idx:start_idx + bat_sz]
+            bat_labels = [[label] for label in tst_labels[start_idx:start_idx + bat_sz]]
                 
-            out = sess.run(lstm_graph["output"][0][-1], {lstm_graph["feat_bat"]: _tst_subseqs[tst_idx], lstm_graph["label_bat"]: _tst_labels[tst_idx]}) 
-            loss = np.abs(out - tst_labels[tst_idx])
+            out = sess.run(lstm_graph["output"], {lstm_graph["feat_bat"]: bat_feats, \
+                                                  lstm_graph["label_bat"]: bat_labels})[:,-1:]
+
+            predicts.append(out)
+            loss = np.mean(np.square(out - tst_labels[bat_idx]))
 
             tst_err.append(loss)
-        return tst_err
+
+        #flatten predictions across batches
+        _predicts = [  seq_predict[0] for bat_predicts in predicts for seq_predict in bat_predicts ] 
+
+        return _predicts, tst_err
 
          
 #
@@ -138,29 +190,48 @@ def test_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params, gmm):
     print("\n**testing ensemble")
 
     with _sess.as_default() as sess: 
-        _tst_subseqs = [ [[[val] for val in subseq]] for subseq in tst_subseqs]  
-        _tst_labels  = [ [[[val]]] for val in tst_labels]
+        _tst_subseqs = [[[[comp for comp in samp] for samp in tst_subseq]] for tst_subseq in tst_subseqs] 
+        _tst_labels  = [[[[comp for comp in label]]] for label in tst_labels]
 
+        tst_predicts = []
         tst_err = []
 
-        #FIXME only partial test
-        for tst_idx in range(len(_tst_subseqs[:500])):
+        #FIXME 
+        for tst_idx in range(len(_tst_subseqs)):
             print("\n**test_idx: " + str(tst_idx) + " of " + str(len(_tst_subseqs)))
             comp_outs = []              
 
             for comp_idx in range(hp["ensemb_sz"]):
-                print("comp_idx: " + str(comp_idx))    
-
                 lstm_graph["lstm_cells"].set_weights(ensemb_params[comp_idx])        
-                comp_out = sess.run(lstm_graph["output"][0][-1], {lstm_graph["feat_bat"]: _tst_subseqs[tst_idx], lstm_graph["label_bat"]: _tst_labels[tst_idx]})
+                comp_out = sess.run(lstm_graph["output"], {lstm_graph["feat_bat"]: _tst_subseqs[tst_idx], \
+                                                           lstm_graph["label_bat"]: _tst_labels[tst_idx]})[:,-1:]
      
-                comp_outs.append(comp_out[0])
-           
-            comp_densities = [val for val in gmm.predict_proba([tst_subseqs[tst_idx]])[0]]
+                comp_outs.append(comp_out)
+    
+            #flatten multivariate subsequences 
+            flat_feats = []   
+            for samp in tst_subseqs[tst_idx]:
+                flat_feats += samp 
 
-            _h = np.dot(comp_outs, comp_densities)
-            loss = np.abs(_h - tst_labels[tst_idx])
+            comp_densities = [val for val in gmm.predict_proba([flat_feats])[0]]
 
+            #weight each component in component model output with density for the component 
+            weighted_comps = []
+            for comp_idx in range(len(comp_outs)):
+                weighted_comp = [comp_outs[comp_idx][dim_idx] * comp_densities[comp_idx] \
+                                 for dim_idx in range(len(comp_outs[0]))]
+                weighted_comps.append(weighted_comp)
+
+            #sum across all axes to get final output
+            ensemb_out = np.sum(weighted_comps, axis=0)[0][0]
+            tst_predicts.append(ensemb_out)         
+ 
+            loss = np.mean(np.square(ensemb_out - tst_labels[tst_idx]))
             tst_err.append(loss)
-        return tst_err
+
+        return tst_predicts, tst_err
+
+
+
+
 

@@ -65,6 +65,7 @@ def create_subseqs(hp, cols):
     else:
         subseq_count = int(float(total_seq_len - subseq_len) / subseq_stride)
 
+    #FIXME normalize by subsequence?
     #normalize time series
     for col_idx in range(1, len(cols)):
         cols[col_idx] = minmax_norm([float(val) for val in cols[col_idx]])
@@ -75,12 +76,15 @@ def create_subseqs(hp, cols):
     for subseq_idx in range(subseq_count):
         _subseq = []
 
-        for samp_idx in range(subseq_len):
-            _samp = float(cols[extract_idxs[0]][subseq_idx * subseq_stride + samp_idx])
-            _subseq.append(_samp)
- 
+        for samp_idx in range(subseq_len): 
+            _samp = [float(cols[feat_idx][subseq_idx * subseq_stride + samp_idx]) \
+                     for feat_idx in extract_idxs]
+
+            _subseq.append(_samp) 
         subseqs.append(_subseq) 
-        labels.append(float(cols[extract_idxs[0]][subseq_idx * subseq_stride + subseq_len]))
+     
+        labels.append([float(cols[feat_idx][subseq_idx * subseq_stride + subseq_len]) \
+                       for feat_idx in extract_idxs])
 
     #shuffle
     shuff_idxs = np.arange(subseq_count)
@@ -95,11 +99,9 @@ def create_subseqs(hp, cols):
     tr_set  = {"feat_subseqs": _subseqs[:tr_count], "labels": _labels[:tr_count]}
     tst_set = {"feat_subseqs": _subseqs[tr_count:], "labels": _labels[tr_count:]}
 
-    #FIXME
     print("\n**tr set sz: " + str(len(tr_set["feat_subseqs"])))
     print("\n**tst set sz: " + str(len(tst_set["feat_subseqs"])))
- 
- 
+  
     return tr_set, tst_set
 
 #

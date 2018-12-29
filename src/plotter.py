@@ -1,12 +1,40 @@
 import numpy as np
 import plotly.offline as plt
 import plotly.graph_objs as graph_obj
+import sys
+
+#
+#
+#
+def plot_residuals(predicts, labels):
+    traces = []
+
+    for comp_idx in range(len(predicts[0])):
+        predicts_trace = graph_obj.Scatter(x = np.arange(len(predicts)), \
+                                           y = [predict[comp_idx] for predict in predicts],
+                                           mode = 'lines',
+                                           name = 'predict_'+str(comp_idx))
+    
+        labels_trace = graph_obj.Scatter(x = np.arange(len(predicts)), \
+                                         y = [label[comp_idx] for label in labels],
+                                      mode = 'lines',
+                                     name = 'gt_'+str(comp_idx))
+        traces.append(predicts_trace)
+        traces.append(labels_trace)
+
+    plt.plot(traces, filename='residuals.html') 
+
+                                      
+
+
+
 
 #
 #
 #
 def plot_3d_clusts(subseqs, clust_idxs):
 
+    '''
     #specify how subsequence will be summarized into 3 dimensions
     rep_idxs = [0, int(float(len(subseqs[0])) / 3), 2 * int(float(len(subseqs[0])) / 3)] 
     vecs_3d  = []
@@ -18,16 +46,23 @@ def plot_3d_clusts(subseqs, clust_idxs):
         redux_3d.append(np.mean(subseq[rep_idxs[2]:]))
             
         vecs_3d.append(redux_3d) 
+    ''' 
+   
 
     #gather coordinates by cluster 
     num_clusts = len(np.unique(clust_idxs)) 
     clust_subseqs = [ [] for clust in range(num_clusts) ]
 
-    for subseq_idx in range(len(vecs_3d)):
+    for subseq_idx in range(len(subseqs)): #range(len(vecs_3d)):
         clust_idx = clust_idxs[subseq_idx]
-        clust_subseqs[clust_idx].append(vecs_3d[subseq_idx])        
+        #clust_subseqs[clust_idx].append(vecs_3d[subseq_idx]) 
+ 
+        #NOTE flatten component dimensions      
+        clust_subseqs[clust_idx].append([subseqs[subseq_idx][0][comp_idx] for comp_idx \
+                                                                          in range(len(subseqs[subseq_idx][0]))] )
 
-    
+
+ 
     traces = [] 
     for clust_idx in range(num_clusts):
         _trace = graph_obj.Scatter3d(

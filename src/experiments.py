@@ -20,27 +20,38 @@ def train_from_clusts(hp, sess_data):
     with sess.as_default() as _sess: 
         #initial training 
         init_params = lstm_graph["lstm_cells"].get_weights()
-        hp["epochs"] = 20
-        #lstm.train(hp, sess_data, _sess, lstm_graph, [init_params])
+        hp["epochs"] = 32
+        lstm.train(hp, sess_data, _sess, lstm_graph, [init_params])
 
         #clone source model for ensemble
         ref_params, ensemb_params = lstm.ensemb_from_src(lstm_graph, hp["ensemb_sz"]) 
 
         #train ensemble 
-        hp["epochs"] = 40
+        hp["epochs"] = 64 #40
         lstm.train_ensemble(hp, sess_data, _sess, lstm_graph, ensemb_params)
+
         #train source
-        hp["epochs"] = 10
-        lstm.train(hp, sess_data, _sess, lstm_graph, ref_params)
+        #hp["epochs"] = 1 #10
+        #lstm.train(hp, sess_data, _sess, lstm_graph, ref_params)
 
         return sess, lstm_graph, ref_params, ensemb_params   
 #
 # gaussian mixture model
 #
-def gmm_clust(clust_sz, feat_vecs):
+def gmm_clust(clust_sz, features):
+    #flatten multivariate time series for mixture
+    flat_feats = []
+
+    for mat in features:
+        flat_obs = []
+
+        for comp in mat:
+            flat_obs += comp
+        flat_feats.append(flat_obs)      
+ 
     gmm_funct  = mixture.GaussianMixture(n_components=clust_sz, init_params='kmeans')
-    clust_idxs = gmm_funct.fit_predict(feat_vecs)
-    
+    clust_idxs = gmm_funct.fit_predict(flat_feats)
+   
     return gmm_funct, clust_idxs
 
 #
